@@ -1,0 +1,106 @@
+name: 'observability'
+
+services:
+  grafana:
+    image: grafana/grafana:${GRAFANA_VERSION:-12.3.2}
+    environment:
+      - GF_SECURITY_ADMIN_USER=luucx7
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD}
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_AUTH_BASIC_ENABLED=true
+      - GF_SERVER_ROOT_URL=${GF_ROOT_URL}
+      - GF_SERVER_SERVE_FROM_SUB_PATH=false
+      - GF_SERVER_DOMAIN=${GF_DOMAIN}
+    volumes:
+      - ./grafana:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    networks:
+      - observability
+      - nginx
+    restart: unless-stopped
+
+  loki:
+    image: 'grafana/loki:${GRAFANA_LOKI_VERSION:-3.6.4}'
+    command: "-config.file=/etc/loki/local-config.yaml"
+    networks:
+    - observability
+    - logs
+    volumes:
+    - "./loki_config.yml:/etc/loki/local-config.yaml:ro"
+    - loki_data:/loki
+    restart: unless-stopped
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:${VICTORIA_VERSION:-v1.135.0}
+    volumes:
+    - victoriametrics_data:/victoria-metrics-data
+    - ./vm-scrape.yml:/etc/vm-scrape.yml:ro
+    networks:
+      - observability
+    command:
+    - "-retentionPeriod=30d"
+    - "-storageDataPath=/victoria-metrics-data"
+    - "-promscrape.config=/etc/vm-scrape.yml"
+    restart: unless-stopped
+
+  promtail:
+    user: root
+    image: grafana/promtail:3.5.9 # after that journald breaks
+    restart: unless-stopped
+    command:
+      - -config.file=/etc/promtail/promtail-config.yml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - ./positions:/etc/promtail
+
+      # PROPRIA HOST!
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+    networks:
+      - observability
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:${CADVISOR_VERSION:-0.56.2}
+    command:
+      - "--docker_only=true"
+      - "--listen_ip=0.0.0.0"
+      - "--port=8080"
+    volumes:
+      - /:/rootfs:ro,rslave
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+    networks:
+      - observability
+    restart: unless-stopped
+
+  node_exporter:
+    image: prom/node-exporter:${NODEEXPORTER_VERSION:-v1.10.2}
+    volumes:
+      - "/:/host:ro,rslave"
+    command:
+      - "--path.rootfs=/host"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|run|var/lib/docker/.+)($|/)"
+      - "--collector.filesystem.fs-types-exclude=^(tmpfs|overlay|squashfs|nsfs)$"
+    networks:
+      - observability
+    restart: unless-stopped
+
+volumes:
+  loki_data:
+  grafana_data:
+  victoriametrics_data:
+
+networks:
+  nginx:
+    name: 'nginx'
+    external: true
+
+  observability:
+    name: 'observability'
+
+  logs:
+    name: 'logs'
+    external: true

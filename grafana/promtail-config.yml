@@ -1,0 +1,146 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 9081
+
+positions:
+  filename: /etc/promtail/positions.yml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker-all
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 10s
+
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        target_label: container
+        regex: '/(.*)'
+        replacement: '$1'
+
+      - target_label: env
+        replacement: vps
+
+      - target_label: source
+        replacement: docker
+
+    pipeline_stages:
+      - output:
+          source: msg
+          max_bytes: 262144
+
+      - json:
+          expressions:
+            level: level
+            msg: message
+
+      # ===== nginx honeypot parser =====
+      - match:
+          selector: '{container="nginx"}'
+          stages:
+
+            - regex:
+                source: log
+                expression: '^(?P<remote_addr>\S+) - - \[(?P<time>[^\]]+)\] "(?P<method>\S+) (?P<uri>\S+) (?P<protocol>[^"]+)" (?P<status>\d+) (?P<body_bytes>\d+) "(?P<referer>[^"]*)" "(?P<user_agent>[^"]*)" "(?P<extra>[^"]*)"'
+
+            - match:
+                selector: '{uri=~".*(\\.env|kube).*"}'
+                stages:
+
+                  - template:
+                      source: log
+                      template: |
+                        {
+                          "level":"info",
+                          "service":"nginx",
+                          "honeypot":true,
+                          "remote_addr":"{{ .remote_addr }}",
+                          "method":"{{ .method }}",
+                          "uri":"{{ .uri }}",
+                          "status":"{{ .status }}",
+                          "user_agent":"{{ .user_agent }}"
+                        }
+
+                  - output:
+                      source: log
+
+                  - labels:
+                      level:
+                      service:
+
+      - labels:
+          level:
+
+  - job_name: journald
+    journal:
+      path: /var/log/journal
+      max_age: 12h
+
+    relabel_configs:
+      - source_labels: ['__journal__systemd_unit']
+        regex: '(docker|containerd|systemd-journald).*'
+        action: drop
+
+      - source_labels: ['__journal__systemd_unit']
+        target_label: unit
+
+      - source_labels: ['__journal__systemd_unit']
+        regex: '(.*)\.service'
+        target_label: service
+        replacement: '$1'
+
+      - source_labels: ['__journal_priority']
+        target_label: priority
+
+      - target_label: source
+        replacement: systemd
+
+      - target_label: env
+        replacement: vps
+
+    pipeline_stages:
+      - match:
+          selector: '{source="systemd"} |= "[UFW "'
+          stages:
+            - regex:
+                expression: '^\[(?P<ufw_action>UFW [A-Z]+)\]\s+(?P<rest>.*)$'
+
+            - static_labels:
+                service_name: ufw
+                level: info
+
+            - regex:
+                expression: 'SRC=(?P<source_ip>\S+)'
+            - regex:
+                expression: 'DST=(?P<dest_ip>\S+)'
+            - regex:
+                expression: 'SPT=(?P<source_port>\d+)'
+            - regex:
+                expression: 'DPT=(?P<dest_port>\d+)'
+            - regex:
+                expression: 'PROTO=(?P<protocol>\S+)'
+            - regex:
+                expression: 'IN=(?P<interface_in>\S+)'
+            - regex:
+                expression: 'OUT=(?P<interface_out>\S*)'
+            - regex:
+                expression: 'MAC=(?P<mac>\S+)'
+            - regex:
+                expression: 'LEN=(?P<size>\d+)'
+            - regex:
+                expression: 'TTL=(?P<ttl>\d+)'
+
+            - structured_metadata:
+                ufw_action:
+                source_ip:
+                source_port:
+                dest_ip:
+                dest_port:
+                protocol:
+                interface_in:
+                interface_out:
+                mac:
+                size:
+                ttl:

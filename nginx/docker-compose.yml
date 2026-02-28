@@ -6,8 +6,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - /opt/nginx/conf.d:/etc/nginx/conf.d:ro
-      - /opt/nginx/html:/usr/share/nginx/html:ro
+      - ./conf.d:/etc/nginx/conf.d:ro
+      - ./html:/usr/share/nginx/html:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - ./cloudflare:/etc/nginx/cloudflare
     restart: unless-stopped
